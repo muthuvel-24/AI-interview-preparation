@@ -3,8 +3,93 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider = "sqlite"
+  url      = "file:./dev.db"
 }
 
-// Models will be added in Phase 1 (Database & Auth)
+model User {
+  id                String             @id @default(uuid())
+  email             String             @unique
+  password          String?
+  name              String
+  avatar            String?
+  provider          String             @default("email") // email, google
+  googleId          String?            @unique
+  role              String             @default("STUDENT") // STUDENT, ADMIN
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  resumes           Resume[]
+  testResults       TestResult[]
+  interviewSessions InterviewSession[]
+  leaderboardEntry  LeaderboardEntry?
+}
+
+model Resume {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fileUrl     String
+  fileName    String
+  atsScore    Int
+  strengths   String   // JSON string of string[]
+  gaps        String   // JSON string of string[]
+  suggestions String   // JSON string of string[]
+  parsedData  String   // JSON string of detailed analysis
+  createdAt   DateTime @default(now())
+}
+
+model TestResult {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testType       String   // MCQ, CODING
+  title          String
+  score          Float
+  maxScore       Float
+  totalQuestions Int
+  correctAnswers Int
+  timeSpent      Int      // seconds
+  details        String   // JSON string of question-by-question response breakdown
+  createdAt      DateTime @default(now())
+}
+
+model InterviewSession {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        String   // HR, TECHNICAL
+  companyName String   @default("General")
+  roleName    String   @default("Software Development Engineer")
+  status      String   @default("IN_PROGRESS") // IN_PROGRESS, COMPLETED
+  transcript  String   // JSON string of message history [{role: 'user'|'assistant', content: string}]
+  score       Float?
+  feedback    String?  // JSON string of ratings and suggestions
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Company {
+  id            String   @id @default(uuid())
+  name          String   @unique
+  logo          String?
+  targetRole    String
+  requiredSkills String  // JSON string of string[]
+  difficulty    String   // Easy, Medium, Hard
+  rounds        String   // JSON string of round details
+  roadmapSteps  String   // JSON string of learning modules & milestones
+  createdAt     DateTime @default(now())
+}
+
+model LeaderboardEntry {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  overallScore   Float
+  mcqScore       Float
+  codingScore    Float
+  interviewScore Float
+  resumeScore    Float
+  rank           Int      @default(0)
+  updatedAt      DateTime @updatedAt
+}
