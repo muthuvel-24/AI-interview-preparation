@@ -81,10 +81,8 @@ export const sendMessage = async (req: AuthRequest, res: Response, next: NextFun
 
     const transcript: { role: 'user' | 'assistant'; content: string }[] = JSON.parse(session.transcript);
 
-    // Append user message
     transcript.push({ role: 'user', content: message });
 
-    // Generate AI response
     const aiRes = await generateInterviewResponse(
       session.type as 'HR' | 'TECHNICAL',
       session.roleName,
@@ -92,10 +90,8 @@ export const sendMessage = async (req: AuthRequest, res: Response, next: NextFun
       transcript
     );
 
-    // Append AI reply
     transcript.push({ role: 'assistant', content: aiRes.reply });
 
-    // Save updated transcript to DB
     const updated = await prisma.interviewSession.update({
       where: { id: sessionId },
       data: { transcript: JSON.stringify(transcript) },
@@ -109,6 +105,68 @@ export const sendMessage = async (req: AuthRequest, res: Response, next: NextFun
         transcript,
       },
     });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ status: 'error', message: 'Validation Error', errors: error.errors });
+      return;
+    }
+    next(error);
+  }
+};
+
+// SSE Streaming Handler
+export const streamMessage = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ status: 'error', message: 'Unauthorized' });
+      return;
+    }
+
+    const { sessionId, message } = sendMessageSchema.parse(req.body);
+
+    const session = await prisma.interviewSession.findUnique({
+      where: { id: sessionId },
+    });
+
+    if (!session || session.userId !== req.user.id) {
+      res.status(404).json({ status: 'error', message: 'Session not found' });
+      return;
+    }
+
+    // Set Server-Sent Events headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const transcript: { role: 'user' | 'assistant'; content: string }[] = JSON.parse(session.transcript);
+    transcript.push({ role: 'user', content: message });
+
+    const aiRes = await generateInterviewResponse(
+      session.type as 'HR' | 'TECHNICAL',
+      session.roleName,
+      session.companyName,
+      transcript
+    );
+
+    const reply = aiRes.reply;
+    const words = reply.split(' ');
+
+    // Stream word by word simulating real-time LLM token generation
+    for (let i = 0; i < words.length; i++) {
+      const chunk = words[i] + (i === words.length - 1 ? '' : ' ');
+      res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+
+    transcript.push({ role: 'assistant', content: reply });
+
+    await prisma.interviewSession.update({
+      where: { id: sessionId },
+      data: { transcript: JSON.stringify(transcript) },
+    });
+
+    res.write('data: [DONE]\n\n');
+    res.end();
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ status: 'error', message: 'Validation Error', errors: error.errors });
@@ -161,7 +219,6 @@ export const completeSession = async (req: AuthRequest, res: Response, next: Nex
       },
     });
 
-    // Update leaderboard score for interview module
     const currentLeaderboard = await prisma.leaderboardEntry.findUnique({
       where: { userId: req.user.id },
     });

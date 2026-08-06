@@ -7,6 +7,7 @@ const router = Router();
 
 router.post('/start', authenticate, aiRateLimiter, interviewController.startSession);
 router.post('/chat', authenticate, aiRateLimiter, interviewController.sendMessage);
+router.post('/chat-stream', authenticate, aiRateLimiter, interviewController.streamMessage);
 router.post('/complete', authenticate, interviewController.completeSession);
 router.get('/history', authenticate, interviewController.getHistory);
 
