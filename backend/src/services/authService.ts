@@ -9,6 +9,7 @@ export interface RegisterInput {
   name: string;
   email: string;
   password: string;
+  role?: string;
 }
 
 export interface LoginInput {
@@ -16,13 +17,39 @@ export interface LoginInput {
   password: string;
 }
 
-export const generateToken = (user: { id: string; email: string; name: string; role: string }) => {
+export const generateToken = (user: {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  streakCount: number;
+  lastActiveDate?: Date | string | null;
+  badges: string[];
+}) => {
   const options: SignOptions = { expiresIn: '7d' };
   return jwt.sign(
-    { id: user.id, email: user.email, name: user.name, role: user.role },
+    {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      streakCount: user.streakCount,
+      lastActiveDate: user.lastActiveDate,
+      badges: user.badges,
+    },
     JWT_SECRET,
     options
   );
+};
+
+export const parseBadges = (badgesString?: string | null): string[] => {
+  if (!badgesString) return ['Welcome Rookie'];
+  try {
+    const parsed = JSON.parse(badgesString);
+    return Array.isArray(parsed) ? parsed : ['Welcome Rookie'];
+  } catch {
+    return ['Welcome Rookie'];
+  }
 };
 
 export const registerUser = async (input: RegisterInput) => {
@@ -35,6 +62,7 @@ export const registerUser = async (input: RegisterInput) => {
   }
 
   const hashedPassword = await bcrypt.hash(input.password, 10);
+  const now = new Date();
 
   const user = await prisma.user.create({
     data: {
@@ -42,6 +70,10 @@ export const registerUser = async (input: RegisterInput) => {
       email: input.email.toLowerCase(),
       password: hashedPassword,
       provider: 'email',
+      role: input.role || 'STUDENT',
+      streakCount: 1,
+      lastActiveDate: now,
+      badges: JSON.stringify(['Welcome Rookie']),
     },
   });
 
@@ -57,7 +89,17 @@ export const registerUser = async (input: RegisterInput) => {
     },
   });
 
-  const token = generateToken(user);
+  const parsed = parseBadges(user.badges);
+
+  const token = generateToken({
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    streakCount: user.streakCount,
+    lastActiveDate: user.lastActiveDate,
+    badges: parsed,
+  });
 
   return {
     user: {
@@ -66,6 +108,9 @@ export const registerUser = async (input: RegisterInput) => {
       email: user.email,
       avatar: user.avatar,
       role: user.role,
+      streakCount: user.streakCount,
+      lastActiveDate: user.lastActiveDate,
+      badges: parsed,
     },
     token,
   };
@@ -85,15 +130,51 @@ export const loginUser = async (input: LoginInput) => {
     throw new AppError('Invalid email or password', 401);
   }
 
-  const token = generateToken(user);
+  const now = new Date();
+  let newStreak = user.streakCount || 1;
+
+  if (user.lastActiveDate) {
+    const lastDate = new Date(user.lastActiveDate);
+    const diffHours = (now.getTime() - lastDate.getTime()) / (1000 * 3600);
+
+    if (diffHours >= 24 && diffHours < 48) {
+      newStreak += 1;
+    } else if (diffHours >= 48) {
+      newStreak = 1;
+    }
+  }
+
+  const updatedUser = await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      streakCount: newStreak,
+      lastActiveDate: now,
+      badges: user.badges || JSON.stringify(['Welcome Rookie']),
+    },
+  });
+
+  const parsedBadges = parseBadges(updatedUser.badges);
+
+  const token = generateToken({
+    id: updatedUser.id,
+    email: updatedUser.email,
+    name: updatedUser.name,
+    role: updatedUser.role,
+    streakCount: updatedUser.streakCount,
+    lastActiveDate: updatedUser.lastActiveDate,
+    badges: parsedBadges,
+  });
 
   return {
     user: {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      avatar: user.avatar,
-      role: user.role,
+      id: updatedUser.id,
+      name: updatedUser.name,
+      email: updatedUser.email,
+      avatar: updatedUser.avatar,
+      role: updatedUser.role,
+      streakCount: updatedUser.streakCount,
+      lastActiveDate: updatedUser.lastActiveDate,
+      badges: parsedBadges,
     },
     token,
   };
@@ -109,6 +190,9 @@ export const getUserById = async (id: string) => {
       avatar: true,
       role: true,
       provider: true,
+      streakCount: true,
+      lastActiveDate: true,
+      badges: true,
       createdAt: true,
     },
   });
@@ -117,5 +201,8 @@ export const getUserById = async (id: string) => {
     throw new AppError('User not found', 404);
   }
 
-  return user;
+  return {
+    ...user,
+    badges: parseBadges(user.badges),
+  };
 };

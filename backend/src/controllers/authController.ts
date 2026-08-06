@@ -7,6 +7,7 @@ const registerSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   email: z.string().email('Invalid email address'),
   password: z.string().min(6, 'Password must be at least 6 characters'),
+  role: z.enum(['STUDENT', 'ADMIN']).optional(),
 });
 
 const loginSchema = z.object({
@@ -72,7 +73,6 @@ export const getMe = async (req: AuthRequest, res: Response, next: NextFunction)
   }
 };
 
-// Google OAuth demo/mock callback handler for dev / testing
 export const googleCallbackMock = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { email, name } = req.body;
@@ -80,10 +80,8 @@ export const googleCallbackMock = async (req: Request, res: Response, next: Next
       res.status(400).json({ status: 'error', message: 'Email and name required' });
       return;
     }
-    // Check or create user
     const existing = await authService.registerUser({ name, email, password: 'google_oauth_user_secret_' + Math.random() }).catch(async () => {
       return await authService.loginUser({ email, password: '' }).catch(async () => {
-        // If login without pass fails, get user directly
         const u = await authService.getUserById(email);
         return { user: u, token: authService.generateToken(u as any) };
       });

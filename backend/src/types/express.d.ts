@@ -8,6 +8,9 @@ declare global {
         email: string;
         name: string;
         role: string;
+        streakCount: number;
+        lastActiveDate?: string | Date | null;
+        badges: string[];
       };
     }
   }

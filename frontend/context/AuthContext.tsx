@@ -9,6 +9,9 @@ export interface User {
   email: string;
   avatar?: string | null;
   role: string;
+  streakCount: number;
+  lastActiveDate?: string | Date | null;
+  badges: string[];
 }
 
 interface AuthContextType {

@@ -19,6 +19,9 @@ export const authenticate = (req: Request, _res: Response, next: NextFunction) =
       email: string;
       name: string;
       role: string;
+      streakCount: number;
+      lastActiveDate?: string | null;
+      badges: string[];
     };
 
     req.user = decoded;
