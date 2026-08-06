@@ -10,13 +10,17 @@ export default function Navbar() {
 
   const navItems = [
     { label: 'Home', href: '/' },
-    { label: 'Resume Analyzer', href: '/resume' },
+    { label: 'Resume Studio', href: '/resume' },
     { label: 'Mock Tests', href: '/tests' },
     { label: 'AI Chatbots', href: '/interview' },
     { label: 'Company Roadmaps', href: '/roadmap' },
     { label: 'Analytics', href: '/analytics' },
     { label: 'Leaderboard', href: '/leaderboard' },
   ];
+
+  if (user?.role === 'ADMIN') {
+    navItems.push({ label: '🛡️ Admin Portal', href: '/admin' });
+  }
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-white/10 bg-slate-950/80 backdrop-blur-md">
@@ -39,7 +43,7 @@ export default function Navbar() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded-lg px-3.5 py-2 text-sm font-medium transition-all ${
+                className={`rounded-lg px-3 py-2 text-xs font-medium transition-all ${
                   isActive
                     ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
                     : 'text-slate-300 hover:bg-white/5 hover:text-white'
@@ -56,12 +60,19 @@ export default function Navbar() {
           {user ? (
             <div className="flex items-center gap-3">
               <div className="hidden sm:flex flex-col text-right">
-                <span className="text-sm font-semibold text-white">{user.name}</span>
-                <span className="text-xs text-slate-400">{user.email}</span>
+                <span className="text-xs font-semibold text-white flex items-center gap-1 justify-end">
+                  {user.name}
+                  {user.role === 'ADMIN' && (
+                    <span className="rounded bg-amber-500/20 px-1 py-0.2 text-[9px] font-bold text-amber-300 border border-amber-500/30">
+                      ADMIN
+                    </span>
+                  )}
+                </span>
+                <span className="text-[10px] text-slate-400">{user.email}</span>
               </div>
               <button
                 onClick={logout}
-                className="rounded-lg border border-red-500/20 bg-red-500/10 px-3.5 py-1.5 text-xs font-semibold text-red-400 transition hover:bg-red-500/20"
+                className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-400 transition hover:bg-red-500/20"
               >
                 Sign Out
               </button>

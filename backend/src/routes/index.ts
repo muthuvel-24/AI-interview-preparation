@@ -5,6 +5,7 @@ import resumeRouter from './resume.js';
 import testRouter from './test.js';
 import interviewRouter from './interview.js';
 import analyticsRouter from './analytics.js';
+import adminRouter from './admin.js';
 
 export const router = Router();
 
@@ -14,3 +15,4 @@ router.use('/resume', resumeRouter);
 router.use('/tests', testRouter);
 router.use('/interview', interviewRouter);
 router.use('/analytics', analyticsRouter);
+router.use('/admin', adminRouter);
