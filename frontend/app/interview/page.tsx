@@ -36,15 +36,88 @@ export default function InterviewPage() {
   const [companyName, setCompanyName] = useState('Google');
   const [roleName, setRoleName] = useState('Software Development Engineer');
 
+  // Voice Mode states
+  const [voiceMode, setVoiceMode] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
     fetchHistory();
+    setupSpeechRecognition();
   }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeSession?.transcript]);
+
+    // Speak AI response if voice mode is enabled
+    if (voiceMode && activeSession?.transcript.length) {
+      const lastMsg = activeSession.transcript[activeSession.transcript.length - 1];
+      if (lastMsg.role === 'assistant') {
+        speakText(lastMsg.content);
+      }
+    }
+  }, [activeSession?.transcript, voiceMode]);
+
+  const setupSpeechRecognition = () => {
+    if (typeof window !== 'undefined') {
+      const SpeechRecognition =
+        (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = 'en-US';
+
+        recognition.onresult = (event: any) => {
+          const transcriptText = event.results[0][0].transcript;
+          setInputMessage(transcriptText);
+          setIsListening(false);
+        };
+
+        recognition.onerror = () => {
+          setIsListening(false);
+        };
+
+        recognition.onend = () => {
+          setIsListening(false);
+        };
+
+        recognitionRef.current = recognition;
+      }
+    }
+  };
+
+  const speakText = (text: string) => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Stop ongoing speech
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  const toggleMicListening = () => {
+    if (!recognitionRef.current) {
+      alert('Speech recognition is not supported in this browser.');
+      return;
+    }
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      setIsListening(true);
+      recognitionRef.current.start();
+    }
+  };
 
   const fetchHistory = async () => {
     try {
@@ -85,7 +158,6 @@ export default function InterviewPage() {
     const userText = inputMessage;
     setInputMessage('');
 
-    // Optimistic update
     const updatedTranscript: Message[] = [
       ...activeSession.transcript,
       { role: 'user', content: userText },
@@ -152,7 +224,7 @@ export default function InterviewPage() {
               <span>🤖</span> AI Mock Interview Chatbots
             </h1>
             <p className="text-sm text-slate-400">
-              Practice HR and Technical interviews tailored for top companies with turn-by-turn feedback.
+              Practice HR and Technical interviews tailored for top companies with turn-by-turn speech feedback.
             </p>
           </div>
 
@@ -221,9 +293,6 @@ export default function InterviewPage() {
                     </span>
                   </div>
                   <p className="text-xs text-slate-400">{s.roleName}</p>
-                  <p className="text-[10px] text-slate-500">
-                    {new Date(s.createdAt).toLocaleDateString()}
-                  </p>
                 </button>
               ))}
 
@@ -247,6 +316,21 @@ export default function InterviewPage() {
                   </div>
 
                   <div className="flex items-center gap-3">
+                    {/* Voice Mode Toggle Button */}
+                    <button
+                      onClick={() => {
+                        setVoiceMode(!voiceMode);
+                        if (voiceMode && typeof window !== 'undefined') window.speechSynthesis?.cancel();
+                      }}
+                      className={`flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-semibold transition ${
+                        voiceMode
+                          ? 'border-purple-500 bg-purple-500/20 text-purple-300 ring-2 ring-purple-500/30'
+                          : 'border-white/10 bg-white/5 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span>{voiceMode ? '🔊 Voice Mode ON' : '🔇 Voice Mode OFF'}</span>
+                    </button>
+
                     {activeSession.status === 'IN_PROGRESS' && (
                       <button
                         onClick={handleCompleteInterview}
@@ -265,24 +349,6 @@ export default function InterviewPage() {
                   </div>
                 </div>
 
-                {/* Feedback Banner if Completed */}
-                {activeSession.status === 'COMPLETED' && activeSession.feedback && (
-                  <div className="border-b border-emerald-500/20 bg-emerald-500/10 p-4 text-xs text-slate-200">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-bold text-emerald-400 text-sm">
-                        🎉 Session Rating Report ({activeSession.score}%)
-                      </span>
-                      <span className="text-[10px] text-emerald-300">
-                        Communication: {activeSession.feedback.communicationRating}% | Technical: {activeSession.feedback.technicalAccuracy}%
-                      </span>
-                    </div>
-                    <p className="text-slate-300">
-                      <span className="font-bold text-slate-400">Strengths: </span>
-                      {activeSession.feedback.strengths.join('; ')}
-                    </p>
-                  </div>
-                )}
-
                 {/* Messages Box */}
                 <div className="flex-1 overflow-y-auto p-6 space-y-4">
                   {activeSession.transcript.map((msg, idx) => (
@@ -297,8 +363,17 @@ export default function InterviewPage() {
                             : 'bg-white/10 text-slate-200 rounded-bl-none border border-white/10'
                         }`}
                       >
-                        <div className="flex items-center gap-2 mb-1 opacity-60 text-[10px] uppercase font-bold">
+                        <div className="flex items-center justify-between gap-4 mb-1 opacity-60 text-[10px] uppercase font-bold">
                           <span>{msg.role === 'user' ? 'You' : 'AI Interviewer'}</span>
+                          {msg.role === 'assistant' && (
+                            <button
+                              onClick={() => speakText(msg.content)}
+                              className="text-purple-300 hover:text-white"
+                              title="Listen to response"
+                            >
+                              🔊 Play
+                            </button>
+                          )}
                         </div>
                         <p>{msg.content}</p>
                       </div>
@@ -319,13 +394,27 @@ export default function InterviewPage() {
                 {/* Chat Input Bar */}
                 {activeSession.status === 'IN_PROGRESS' && (
                   <form onSubmit={handleSendMessage} className="border-t border-white/10 bg-slate-950/40 p-4 flex gap-3">
+                    <button
+                      type="button"
+                      onClick={toggleMicListening}
+                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border text-lg transition ${
+                        isListening
+                          ? 'border-red-500 bg-red-500/20 text-red-400 animate-pulse'
+                          : 'border-white/10 bg-white/5 text-slate-300 hover:bg-white/10'
+                      }`}
+                      title={isListening ? 'Listening...' : 'Click to speak'}
+                    >
+                      🎙️
+                    </button>
+
                     <input
                       type="text"
                       value={inputMessage}
                       onChange={(e) => setInputMessage(e.target.value)}
-                      placeholder="Type your response to the interviewer..."
+                      placeholder={isListening ? 'Listening to your voice...' : 'Type or speak your answer...'}
                       className="flex-1 rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white placeholder-slate-500 focus:border-purple-500 focus:outline-none"
                     />
+
                     <button
                       type="submit"
                       disabled={loading || !inputMessage.trim()}
@@ -341,7 +430,7 @@ export default function InterviewPage() {
                 <span className="text-5xl mb-3 opacity-60">🎙️</span>
                 <h3 className="text-xl font-bold text-white">Select or Start an Interview Session</h3>
                 <p className="mt-1 max-w-sm text-xs text-slate-400">
-                  Select an existing session from the left sidebar or click "Start New Interview" at the top to practice with the AI interviewer.
+                  Select an existing session from the left sidebar or click "Start New Interview" at the top to practice with the AI interviewer using text or voice.
                 </p>
               </div>
             )}

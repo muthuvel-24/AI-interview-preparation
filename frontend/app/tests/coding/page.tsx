@@ -25,6 +25,12 @@ interface TestRunResult {
   results: { input: string; expected: string; actual: string; passed: boolean; error?: string }[];
 }
 
+interface ComplexityResult {
+  timeComplexity: string;
+  spaceComplexity: string;
+  explanation: string;
+}
+
 export default function CodingWorkspacePage() {
   const [challenges, setChallenges] = useState<CodingChallenge[]>([]);
   const [activeChallenge, setActiveChallenge] = useState<CodingChallenge | null>(null);
@@ -33,6 +39,12 @@ export default function CodingWorkspacePage() {
   const [running, setRunning] = useState(false);
   const [testResult, setTestResult] = useState<TestRunResult | null>(null);
   const [submitted, setSubmitted] = useState(false);
+
+  // AI Assistant states
+  const [hint, setHint] = useState<string | null>(null);
+  const [hintLoading, setHintLoading] = useState(false);
+  const [complexity, setComplexity] = useState<ComplexityResult | null>(null);
+  const [complexityLoading, setComplexityLoading] = useState(false);
 
   useEffect(() => {
     fetchChallenges();
@@ -57,6 +69,8 @@ export default function CodingWorkspacePage() {
     setCode(c.starterCode[language] || c.starterCode.javascript);
     setTestResult(null);
     setSubmitted(false);
+    setHint(null);
+    setComplexity(null);
   };
 
   const handleLanguageChange = (lang: 'javascript' | 'python') => {
@@ -110,6 +124,46 @@ export default function CodingWorkspacePage() {
     }
   };
 
+  const handleGetHint = async () => {
+    if (!activeChallenge) return;
+    setHintLoading(true);
+
+    try {
+      const res = await apiPost<{ status: string; data: { hint: string } }>('/tests/coding/hint', {
+        challengeId: activeChallenge.id,
+        code,
+      });
+
+      if (res.ok && res.data?.data) {
+        setHint(res.data.data.hint);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setHintLoading(false);
+    }
+  };
+
+  const handleAnalyzeComplexity = async () => {
+    if (!code) return;
+    setComplexityLoading(true);
+
+    try {
+      const res = await apiPost<{ status: string; data: ComplexityResult }>('/tests/coding/complexity', {
+        code,
+        language,
+      });
+
+      if (res.ok && res.data?.data) {
+        setComplexity(res.data.data);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setComplexityLoading(false);
+    }
+  };
+
   return (
     <ProtectedRoute>
       <div className="flex h-[calc(100vh-73px)] flex-col bg-slate-950 overflow-hidden">
@@ -120,7 +174,6 @@ export default function CodingWorkspacePage() {
               <span>💻</span> Coding Sandbox
             </span>
 
-            {/* Challenge Selector */}
             <select
               value={activeChallenge?.id || ''}
               onChange={(e) => {
@@ -137,9 +190,27 @@ export default function CodingWorkspacePage() {
             </select>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            {/* AI Hint Button */}
+            <button
+              onClick={handleGetHint}
+              disabled={hintLoading}
+              className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-300 transition hover:bg-amber-500/20 disabled:opacity-50"
+            >
+              {hintLoading ? 'Thinking...' : '💡 Get AI Hint'}
+            </button>
+
+            {/* AI Complexity Analyzer Button */}
+            <button
+              onClick={handleAnalyzeComplexity}
+              disabled={complexityLoading}
+              className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-300 transition hover:bg-cyan-500/20 disabled:opacity-50"
+            >
+              {complexityLoading ? 'Analyzing...' : '⚡ Big-O Complexity'}
+            </button>
+
             {/* Language Selector */}
-            <div className="flex rounded-lg border border-white/10 bg-white/5 p-1">
+            <div className="flex rounded-lg border border-white/10 bg-white/5 p-1 ml-2">
               <button
                 onClick={() => handleLanguageChange('javascript')}
                 className={`rounded-md px-3 py-1 text-xs font-semibold transition ${
@@ -179,7 +250,7 @@ export default function CodingWorkspacePage() {
         {/* Main Content Workspace Split Panel */}
         <div className="grid flex-1 grid-cols-1 md:grid-cols-12 overflow-hidden">
           {/* Left: Problem Description Panel */}
-          <div className="md:col-span-5 flex flex-col border-r border-white/10 bg-slate-900/40 p-6 overflow-y-auto">
+          <div className="md:col-span-5 flex flex-col border-r border-white/10 bg-slate-900/40 p-6 overflow-y-auto space-y-4">
             {activeChallenge && (
               <div className="space-y-6">
                 <div>
@@ -214,6 +285,26 @@ export default function CodingWorkspacePage() {
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* AI Hint Box if active */}
+            {hint && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-xs text-amber-200 space-y-1">
+                <p className="font-bold text-amber-300">💡 Mentor Hint:</p>
+                <p>{hint}</p>
+              </div>
+            )}
+
+            {/* Big-O Complexity Box if active */}
+            {complexity && (
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-xs text-cyan-200 space-y-2">
+                <p className="font-bold text-cyan-300">⚡ Code Complexity Analysis:</p>
+                <div className="flex gap-4">
+                  <span className="font-mono text-white">Time: <strong className="text-cyan-400">{complexity.timeComplexity}</strong></span>
+                  <span className="font-mono text-white">Space: <strong className="text-cyan-400">{complexity.spaceComplexity}</strong></span>
+                </div>
+                <p className="text-[11px] text-slate-300">{complexity.explanation}</p>
               </div>
             )}
           </div>

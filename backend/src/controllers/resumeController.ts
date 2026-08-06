@@ -2,7 +2,7 @@ import { Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { AuthRequest } from '../middleware/auth.js';
 import { generatePresignedUploadUrl } from '../services/s3Service.js';
-import { analyzeResumeContent } from '../services/aiService.js';
+import { analyzeResumeContent, rephraseResumeBullet, matchResumeToJD } from '../services/aiService.js';
 import { prisma } from '../prisma/client.js';
 
 const uploadUrlSchema = z.object({
@@ -15,6 +15,16 @@ const analyzeSchema = z.object({
   fileName: z.string().default('resume.pdf'),
   resumeText: z.string().min(10, 'Resume content must be at least 10 characters long'),
   targetRole: z.string().default('Software Development Engineer'),
+});
+
+const rephraseSchema = z.object({
+  bullet: z.string().min(5, 'Bullet text must be at least 5 characters long'),
+  targetRole: z.string().default('Software Development Engineer'),
+});
+
+const jdMatchSchema = z.object({
+  resumeText: z.string().min(10, 'Resume text is required'),
+  jobDescription: z.string().min(10, 'Job Description is required'),
 });
 
 export const getUploadUrl = async (req: AuthRequest, res: Response, next: NextFunction) => {
@@ -45,7 +55,6 @@ export const analyzeResume = async (req: AuthRequest, res: Response, next: NextF
 
     const analysis = await analyzeResumeContent(resumeText, targetRole);
 
-    // Save resume record in DB
     const savedResume = await prisma.resume.create({
       data: {
         userId: req.user.id,
@@ -59,7 +68,6 @@ export const analyzeResume = async (req: AuthRequest, res: Response, next: NextF
       },
     });
 
-    // Update leaderboard score for resume module
     const currentLeaderboard = await prisma.leaderboardEntry.findUnique({
       where: { userId: req.user.id },
     });
@@ -103,6 +111,40 @@ export const analyzeResume = async (req: AuthRequest, res: Response, next: NextF
   }
 };
 
+export const rephraseBullet = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { bullet, targetRole } = rephraseSchema.parse(req.body);
+    const result = await rephraseResumeBullet(bullet, targetRole);
+    res.json({
+      status: 'success',
+      data: result,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ status: 'error', message: 'Validation Error', errors: error.errors });
+      return;
+    }
+    next(error);
+  }
+};
+
+export const matchJobDescription = async (req: AuthRequest, res: Response, next: NextFunction) => {
+  try {
+    const { resumeText, jobDescription } = jdMatchSchema.parse(req.body);
+    const result = await matchResumeToJD(resumeText, jobDescription);
+    res.json({
+      status: 'success',
+      data: result,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ status: 'error', message: 'Validation Error', errors: error.errors });
+      return;
+    }
+    next(error);
+  }
+};
+
 export const getMyResumes = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     if (!req.user) {
@@ -136,7 +178,6 @@ export const getMyResumes = async (req: AuthRequest, res: Response, next: NextFu
   }
 };
 
-// Mock upload handler for local dev
 export const mockUpload = async (req: AuthRequest, res: Response) => {
   res.json({ status: 'success', message: 'File uploaded locally to mock storage' });
 };

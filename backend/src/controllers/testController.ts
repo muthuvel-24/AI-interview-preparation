@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { AuthRequest } from '../middleware/auth.js';
 import * as testService from '../services/testService.js';
+import { generateCodingHint, analyzeCodeComplexity } from '../services/aiService.js';
 
 const mcqSubmitSchema = z.object({
   answers: z.array(
@@ -17,6 +18,16 @@ const codeExecuteSchema = z.object({
   challengeId: z.string(),
   language: z.string().default('javascript'),
   code: z.string().min(1, 'Code cannot be empty'),
+});
+
+const hintSchema = z.object({
+  challengeId: z.string(),
+  code: z.string().default(''),
+});
+
+const complexitySchema = z.object({
+  code: z.string().min(1, 'Code cannot be empty'),
+  language: z.string().default('javascript'),
 });
 
 export const getMCQs = (req: Request, res: Response) => {
@@ -81,6 +92,35 @@ export const submitCode = async (req: AuthRequest, res: Response, next: NextFunc
     const { challengeId, language, code } = codeExecuteSchema.parse(req.body);
     const result = await testService.submitCodingTest(req.user.id, challengeId, language, code);
     res.status(201).json({ status: 'success', data: result });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ status: 'error', message: 'Validation Error', errors: error.errors });
+      return;
+    }
+    next(error);
+  }
+};
+
+export const getHint = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { challengeId, code } = hintSchema.parse(req.body);
+    const challenge = testService.getCodingChallengeById(challengeId);
+    const hint = await generateCodingHint(challenge?.title || challengeId, code);
+    res.json({ status: 'success', data: { hint } });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ status: 'error', message: 'Validation Error', errors: error.errors });
+      return;
+    }
+    next(error);
+  }
+};
+
+export const analyzeComplexity = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { code, language } = complexitySchema.parse(req.body);
+    const analysis = await analyzeCodeComplexity(code, language);
+    res.json({ status: 'success', data: analysis });
   } catch (error) {
     if (error instanceof z.ZodError) {
       res.status(400).json({ status: 'error', message: 'Validation Error', errors: error.errors });

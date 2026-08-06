@@ -94,6 +94,132 @@ export const analyzeResumeContent = async (
   };
 };
 
+export const rephraseResumeBullet = async (
+  bullet: string,
+  targetRole: string = 'Software Engineer'
+): Promise<{ original: string; suggestions: string[] }> => {
+  const apiKey = process.env.AI_API_KEY;
+
+  if (apiKey && apiKey !== 'placeholder') {
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert resume writer. Rephrase the bullet point into 3 STAR-method, action-verb driven bullets with realistic metrics for the given role. Return JSON {"suggestions": string[]}.',
+            },
+            {
+              role: 'user',
+              content: `Role: ${targetRole}\nBullet: "${bullet}"`,
+            },
+          ],
+          response_format: { type: 'json_object' },
+        }),
+      });
+
+      const data = (await response.json()) as any;
+      if (data?.choices?.[0]?.message?.content) {
+        const parsed = JSON.parse(data.choices[0].message.content);
+        return { original: bullet, suggestions: parsed.suggestions || [] };
+      }
+    } catch (e) {
+      console.warn('AI Rephrase API failed:', e);
+    }
+  }
+
+  // Fallback STAR rephraser engine
+  const verbs = ['Engineered', 'Architected', 'Optimized', 'Spearheaded', 'Implemented'];
+  const v1 = `${verbs[0]} a high-performance feature using modern software patterns, improving system throughput by 30%.`;
+  const v2 = `${verbs[1]} scalable backend services for ${targetRole} workflows, reducing response latency by 45%.`;
+  const v3 = `${verbs[2]} and deployed end-to-end functionality, ensuring 99.9% uptime across production environments.`;
+
+  return {
+    original: bullet,
+    suggestions: [
+      `${verbs[0]} ${bullet.replace(/^(built|created|made|worked on)\s+/i, '')}, resulting in a 35% performance boost.`,
+      `${verbs[1]} modular solution based on ${bullet}, reducing query execution time by 40%.`,
+      `${verbs[2]} comprehensive application workflow for ${targetRole} domain, increasing test coverage by 25%.`,
+    ],
+  };
+};
+
+export const matchResumeToJD = async (
+  resumeText: string,
+  jobDescription: string
+): Promise<{
+  matchPercentage: number;
+  matchedKeywords: string[];
+  missingKeywords: string[];
+  fitLevel: string;
+  summary: string;
+}> => {
+  const apiKey = process.env.AI_API_KEY;
+
+  if (apiKey && apiKey !== 'placeholder') {
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'Compare the candidate resume against the Job Description. Return JSON {"matchPercentage": number, "matchedKeywords": string[], "missingKeywords": string[], "fitLevel": string, "summary": string}.',
+            },
+            {
+              role: 'user',
+              content: `Resume:\n${resumeText}\n\nJob Description:\n${jobDescription}`,
+            },
+          ],
+          response_format: { type: 'json_object' },
+        }),
+      });
+
+      const data = (await response.json()) as any;
+      if (data?.choices?.[0]?.message?.content) {
+        return JSON.parse(data.choices[0].message.content);
+      }
+    } catch (e) {
+      console.warn('AI JD Match API failed:', e);
+    }
+  }
+
+  // Fallback heuristic JD matcher
+  const jdLower = jobDescription.toLowerCase();
+  const resumeLower = resumeText.toLowerCase();
+
+  const commonKeywords = [
+    'react', 'next.js', 'typescript', 'javascript', 'node.js', 'express', 'python',
+    'java', 'c++', 'sql', 'postgresql', 'mongodb', 'docker', 'aws', 'git', 'rest api',
+    'graphql', 'testing', 'jest', 'ci/cd', 'agile', 'system design', 'data structures'
+  ];
+
+  const jdReqs = commonKeywords.filter(k => jdLower.includes(k));
+  const matched = jdReqs.filter(k => resumeLower.includes(k));
+  const missing = jdReqs.filter(k => !resumeLower.includes(k));
+
+  const pct = jdReqs.length > 0 ? Math.round((matched.length / jdReqs.length) * 100) : 75;
+
+  return {
+    matchPercentage: Math.max(pct, 60),
+    matchedKeywords: matched.length > 0 ? matched : ['JavaScript', 'React', 'Git'],
+    missingKeywords: missing.length > 0 ? missing : ['Docker', 'AWS'],
+    fitLevel: pct >= 80 ? 'Strong Match' : pct >= 60 ? 'Moderate Match' : 'Potential Skill Gap',
+    summary: `Candidate matches ${matched.length} out of ${jdReqs.length} key technical requirements specified in the job description.`,
+  };
+};
+
 export const generateInterviewResponse = async (
   type: 'HR' | 'TECHNICAL',
   roleName: string,
@@ -162,4 +288,113 @@ export const generateInterviewResponse = async (
       reply: `Good technical intuition! Let's move to data structures: How would you implement a Rate Limiter algorithm (e.g. Token Bucket or Leaky Bucket) for an API Gateway?`,
     };
   }
+};
+
+export const generateCodingHint = async (
+  challengeTitle: string,
+  code: string
+): Promise<string> => {
+  const apiKey = process.env.AI_API_KEY;
+
+  if (apiKey && apiKey !== 'placeholder') {
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a coding mentor. Provide a 2-sentence incremental hint for the user code without giving away the complete solution.',
+            },
+            {
+              role: 'user',
+              content: `Problem: ${challengeTitle}\nUser Code:\n${code}`,
+            },
+          ],
+        }),
+      });
+
+      const data = (await response.json()) as any;
+      if (data?.choices?.[0]?.message?.content) {
+        return data.choices[0].message.content;
+      }
+    } catch (e) {
+      console.warn('AI Hint API failed:', e);
+    }
+  }
+
+  // Fallback hint engine
+  if (challengeTitle.toLowerCase().includes('sum')) {
+    return '💡 Hint: Consider using a Hash Map to store elements and their index as you iterate. Check if (target - currentNum) exists in the map in O(1) time.';
+  }
+  if (challengeTitle.toLowerCase().includes('palindrome')) {
+    return '💡 Hint: Normalize the string by keeping only alphanumeric characters in lowercase. Compare the cleaned string with its reverse.';
+  }
+  return '💡 Hint: Check your edge cases (empty input, single element) and consider using a dynamic programming array or 2-pointer approach.';
+};
+
+export const analyzeCodeComplexity = async (
+  code: string,
+  language: string = 'javascript'
+): Promise<{ timeComplexity: string; spaceComplexity: string; explanation: string }> => {
+  const apiKey = process.env.AI_API_KEY;
+
+  if (apiKey && apiKey !== 'placeholder') {
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'Analyze the Big-O Time & Space complexity of the given code. Return JSON {"timeComplexity": string, "spaceComplexity": string, "explanation": string}.',
+            },
+            {
+              role: 'user',
+              content: `Language: ${language}\nCode:\n${code}`,
+            },
+          ],
+          response_format: { type: 'json_object' },
+        }),
+      });
+
+      const data = (await response.json()) as any;
+      if (data?.choices?.[0]?.message?.content) {
+        return JSON.parse(data.choices[0].message.content);
+      }
+    } catch (e) {
+      console.warn('AI Complexity API failed:', e);
+    }
+  }
+
+  // Fallback Big-O analyzer
+  const lowerCode = code.toLowerCase();
+  let time = 'O(N)';
+  let space = 'O(N)';
+  let explanation = 'Single loop pass through the input size N, with auxiliary space allocated for tracking elements.';
+
+  if (lowerCode.includes('for') && (lowerCode.match(/for/g) || []).length >= 2) {
+    time = 'O(N^2)';
+    explanation = 'Nested loops detected causing quadratic O(N^2) time complexity.';
+  } else if (lowerCode.includes('map') || lowerCode.includes('set') || lowerCode.includes('seen')) {
+    time = 'O(N)';
+    space = 'O(N)';
+    explanation = 'Linear single pass O(N) using Hash Map for O(1) average lookup time.';
+  } else if (lowerCode.includes('sort')) {
+    time = 'O(N log N)';
+    space = 'O(1)';
+    explanation = 'Sorting algorithm used leading to O(N log N) time complexity.';
+  }
+
+  return { timeComplexity: time, spaceComplexity: space, explanation };
 };
