@@ -2,7 +2,11 @@ import { Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { AuthRequest } from '../middleware/auth.js';
 import { prisma } from '../prisma/client.js';
-import { generateInterviewResponse } from '../services/aiService.js';
+import {
+  generateInterviewResponse,
+  streamInterviewTokens,
+  evaluateInterviewTranscript,
+} from '../services/aiService.js';
 
 const startSessionSchema = z.object({
   type: z.enum(['HR', 'TECHNICAL']),
@@ -114,7 +118,7 @@ export const sendMessage = async (req: AuthRequest, res: Response, next: NextFun
   }
 };
 
-// SSE Streaming Handler
+// Real-Time SSE Token Streaming Handler
 export const streamMessage = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
     if (!req.user) {
@@ -141,24 +145,21 @@ export const streamMessage = async (req: AuthRequest, res: Response, next: NextF
     const transcript: { role: 'user' | 'assistant'; content: string }[] = JSON.parse(session.transcript);
     transcript.push({ role: 'user', content: message });
 
-    const aiRes = await generateInterviewResponse(
+    // Stream tokens directly from generator
+    const tokenGenerator = streamInterviewTokens(
       session.type as 'HR' | 'TECHNICAL',
       session.roleName,
       session.companyName,
       transcript
     );
 
-    const reply = aiRes.reply;
-    const words = reply.split(' ');
-
-    // Stream word by word simulating real-time LLM token generation
-    for (let i = 0; i < words.length; i++) {
-      const chunk = words[i] + (i === words.length - 1 ? '' : ' ');
+    let fullReply = '';
+    for await (const chunk of tokenGenerator) {
+      fullReply += chunk;
       res.write(`data: ${JSON.stringify({ chunk })}\n\n`);
-      await new Promise((resolve) => setTimeout(resolve, 40));
     }
 
-    transcript.push({ role: 'assistant', content: reply });
+    transcript.push({ role: 'assistant', content: fullReply });
 
     await prisma.interviewSession.update({
       where: { id: sessionId },
@@ -192,29 +193,31 @@ export const completeSession = async (req: AuthRequest, res: Response, next: Nex
     }
 
     const transcript: { role: 'user' | 'assistant'; content: string }[] = JSON.parse(session.transcript);
-    const userMsgCount = transcript.filter((t) => t.role === 'user').length;
 
-    const baseScore = Math.min(70 + userMsgCount * 6, 95);
+    // Dynamic 4-Dimension Rubric Evaluation
+    const evaluation = await evaluateInterviewTranscript(
+      session.type as 'HR' | 'TECHNICAL',
+      session.roleName,
+      session.companyName,
+      transcript
+    );
 
     const feedback = {
-      overallScore: baseScore,
-      communicationRating: Math.min(baseScore + 2, 98),
-      technicalAccuracy: session.type === 'TECHNICAL' ? baseScore : baseScore - 3,
-      strengths: [
-        'Clear problem explanation and structured response style',
-        'Good enthusiasm and engagement during the interview conversation',
-      ],
-      areasForImprovement: [
-        'Elaborate more on real-world project tradeoffs and performance metrics',
-        'Use the STAR method (Situation, Task, Action, Result) for behavioral questions',
-      ],
+      overallScore: evaluation.overallScore,
+      communicationRating: evaluation.communicationRating,
+      technicalAccuracy: evaluation.technicalAccuracy,
+      problemSolvingRating: evaluation.problemSolvingRating,
+      relevanceRating: evaluation.relevanceRating,
+      strengths: evaluation.strengths,
+      areasForImprovement: evaluation.areasForImprovement,
+      detailedFeedback: evaluation.detailedFeedback,
     };
 
     const updated = await prisma.interviewSession.update({
       where: { id: sessionId },
       data: {
         status: 'COMPLETED',
-        score: baseScore,
+        score: evaluation.overallScore,
         feedback: JSON.stringify(feedback),
       },
     });
@@ -224,7 +227,7 @@ export const completeSession = async (req: AuthRequest, res: Response, next: Nex
     });
 
     if (currentLeaderboard) {
-      const newInterviewScore = Math.max(currentLeaderboard.interviewScore, baseScore);
+      const newInterviewScore = Math.max(currentLeaderboard.interviewScore, evaluation.overallScore);
       const overall =
         (currentLeaderboard.mcqScore +
           currentLeaderboard.codingScore +
@@ -244,7 +247,7 @@ export const completeSession = async (req: AuthRequest, res: Response, next: Nex
       status: 'success',
       data: {
         sessionId: updated.id,
-        score: baseScore,
+        score: evaluation.overallScore,
         feedback,
       },
     });

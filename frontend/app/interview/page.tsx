@@ -9,6 +9,17 @@ interface Message {
   content: string;
 }
 
+interface InterviewFeedback {
+  overallScore: number;
+  communicationRating: number;
+  technicalAccuracy: number;
+  problemSolvingRating?: number;
+  relevanceRating?: number;
+  strengths: string[];
+  areasForImprovement: string[];
+  detailedFeedback?: string;
+}
+
 interface InterviewSession {
   id: string;
   type: 'HR' | 'TECHNICAL';
@@ -17,13 +28,7 @@ interface InterviewSession {
   status: string;
   score?: number;
   transcript: Message[];
-  feedback?: {
-    overallScore: number;
-    communicationRating: number;
-    technicalAccuracy: number;
-    strengths: string[];
-    areasForImprovement: string[];
-  };
+  feedback?: InterviewFeedback;
   createdAt: string;
 }
 
@@ -35,11 +40,11 @@ export default function InterviewPage() {
   const [type, setType] = useState<'HR' | 'TECHNICAL'>('TECHNICAL');
   const [companyName, setCompanyName] = useState('Google');
   const [roleName, setRoleName] = useState('Software Development Engineer');
+  const [showScorecard, setShowScorecard] = useState(false);
 
   // Voice Mode states
   const [voiceMode, setVoiceMode] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -53,13 +58,13 @@ export default function InterviewPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
 
     // Speak AI response if voice mode is enabled
-    if (voiceMode && activeSession?.transcript.length) {
+    if (voiceMode && activeSession?.transcript.length && !loading) {
       const lastMsg = activeSession.transcript[activeSession.transcript.length - 1];
       if (lastMsg.role === 'assistant') {
         speakText(lastMsg.content);
       }
     }
-  }, [activeSession?.transcript, voiceMode]);
+  }, [activeSession?.transcript, voiceMode, loading]);
 
   const setupSpeechRecognition = () => {
     if (typeof window !== 'undefined') {
@@ -92,15 +97,10 @@ export default function InterviewPage() {
 
   const speakText = (text: string) => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel(); // Stop ongoing speech
+      window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = 1.0;
       utterance.pitch = 1.0;
-
-      utterance.onstart = () => setIsSpeaking(true);
-      utterance.onend = () => setIsSpeaking(false);
-      utterance.onerror = () => setIsSpeaking(false);
-
       window.speechSynthesis.speak(utterance);
     }
   };
@@ -132,6 +132,7 @@ export default function InterviewPage() {
 
   const startNewSession = async () => {
     setLoading(true);
+    setShowScorecard(false);
     try {
       const res = await apiPost<{ status: string; data: InterviewSession }>('/interview/start', {
         type,
@@ -155,7 +156,7 @@ export default function InterviewPage() {
     e.preventDefault();
     if (!inputMessage.trim() || !activeSession || loading) return;
 
-    const userText = inputMessage;
+    const userText = inputMessage.trim();
     setInputMessage('');
 
     const updatedTranscript: Message[] = [
@@ -163,6 +164,7 @@ export default function InterviewPage() {
       { role: 'user', content: userText },
     ];
 
+    // Optimistically update transcript
     setActiveSession({
       ...activeSession,
       transcript: updatedTranscript,
@@ -171,19 +173,79 @@ export default function InterviewPage() {
     setLoading(true);
 
     try {
-      const res = await apiPost<{ status: string; data: { reply: string; transcript: Message[] } }>('/interview/chat', {
-        sessionId: activeSession.id,
-        message: userText,
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+
+      const response = await fetch(`${apiUrl}/interview/chat-stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          sessionId: activeSession.id,
+          message: userText,
+        }),
       });
 
-      if (res.ok && res.data?.data) {
-        setActiveSession({
-          ...activeSession,
-          transcript: res.data.data.transcript,
+      if (!response.ok || !response.body) {
+        // Fallback to standard chat
+        const res = await apiPost<{ status: string; data: { reply: string; transcript: Message[] } }>('/interview/chat', {
+          sessionId: activeSession.id,
+          message: userText,
         });
+
+        if (res.ok && res.data?.data) {
+          setActiveSession({
+            ...activeSession,
+            transcript: res.data.data.transcript,
+          });
+        }
+        return;
+      }
+
+      // Stream incoming tokens
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let streamedAssistantText = '';
+      let buffer = '';
+
+      // Append assistant placeholder
+      setActiveSession({
+        ...activeSession,
+        transcript: [...updatedTranscript, { role: 'assistant', content: '' }],
+      });
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data: ')) {
+            const dataStr = trimmed.slice(6);
+            if (dataStr === '[DONE]') break;
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.chunk) {
+                streamedAssistantText += parsed.chunk;
+                setActiveSession((prev) => {
+                  if (!prev) return null;
+                  const cur = [...prev.transcript];
+                  cur[cur.length - 1] = { role: 'assistant', content: streamedAssistantText };
+                  return { ...prev, transcript: cur };
+                });
+              }
+            } catch {}
+          }
+        }
       }
     } catch (e) {
-      console.error(e);
+      console.error('Chat error:', e);
     } finally {
       setLoading(false);
     }
@@ -194,18 +256,19 @@ export default function InterviewPage() {
     setLoading(true);
 
     try {
-      const res = await apiPost<{ status: string; data: { score: number; feedback: any } }>('/interview/complete', {
+      const res = await apiPost<{ status: string; data: { score: number; feedback: InterviewFeedback } }>('/interview/complete', {
         sessionId: activeSession.id,
       });
 
       if (res.ok && res.data?.data) {
-        const completed = {
+        const completed: InterviewSession = {
           ...activeSession,
           status: 'COMPLETED',
           score: res.data.data.score,
           feedback: res.data.data.feedback,
         };
         setActiveSession(completed);
+        setShowScorecard(true);
         fetchHistory();
       }
     } catch (e) {
@@ -224,7 +287,7 @@ export default function InterviewPage() {
               <span>🤖</span> AI Mock Interview Chatbots
             </h1>
             <p className="text-sm text-slate-400">
-              Practice HR and Technical interviews tailored for top companies with turn-by-turn speech feedback.
+              Practice HR & Technical interviews evaluated against a weighted 4-dimension engineering rubric.
             </p>
           </div>
 
@@ -273,7 +336,10 @@ export default function InterviewPage() {
               {sessions.map((s) => (
                 <button
                   key={s.id}
-                  onClick={() => setActiveSession(s)}
+                  onClick={() => {
+                    setActiveSession(s);
+                    if (s.status === 'COMPLETED') setShowScorecard(true);
+                  }}
                   className={`flex w-full flex-col gap-1 rounded-xl border p-3.5 text-left transition ${
                     activeSession?.id === s.id
                       ? 'border-purple-500 bg-purple-500/10 text-white'
@@ -297,7 +363,7 @@ export default function InterviewPage() {
               ))}
 
               {sessions.length === 0 && (
-                <p className="text-xs text-slate-500 text-center py-6">No past sessions. Click "Start New Interview" above.</p>
+                <p className="text-xs text-slate-500 text-center py-6">No past sessions. Click &quot;Start New Interview&quot; above.</p>
               )}
             </div>
           </div>
@@ -316,7 +382,6 @@ export default function InterviewPage() {
                   </div>
 
                   <div className="flex items-center gap-3">
-                    {/* Voice Mode Toggle Button */}
                     <button
                       onClick={() => {
                         setVoiceMode(!voiceMode);
@@ -331,12 +396,22 @@ export default function InterviewPage() {
                       <span>{voiceMode ? '🔊 Voice Mode ON' : '🔇 Voice Mode OFF'}</span>
                     </button>
 
+                    {activeSession.status === 'COMPLETED' && activeSession.feedback && (
+                      <button
+                        onClick={() => setShowScorecard(true)}
+                        className="rounded-xl border border-purple-500/40 bg-purple-500/10 px-3.5 py-1.5 text-xs font-bold text-purple-300 transition hover:bg-purple-500/20"
+                      >
+                        📊 View Scorecard ({activeSession.score}%)
+                      </button>
+                    )}
+
                     {activeSession.status === 'IN_PROGRESS' && (
                       <button
                         onClick={handleCompleteInterview}
-                        className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20"
+                        disabled={loading}
+                        className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-1.5 text-xs font-semibold text-emerald-400 transition hover:bg-emerald-500/20 disabled:opacity-50"
                       >
-                        End & Get Score Report
+                        End & Get Rubric Score
                       </button>
                     )}
 
@@ -380,11 +455,11 @@ export default function InterviewPage() {
                     </div>
                   ))}
 
-                  {loading && (
+                  {loading && !activeSession.transcript[activeSession.transcript.length - 1]?.content && (
                     <div className="flex justify-start">
                       <div className="rounded-2xl bg-white/10 p-4 text-xs text-slate-400 flex items-center gap-2">
                         <div className="h-3 w-3 animate-spin rounded-full border-2 border-purple-400 border-t-transparent" />
-                        AI Interviewer is thinking...
+                        AI Interviewer is evaluating and generating question...
                       </div>
                     </div>
                   )}
@@ -430,12 +505,148 @@ export default function InterviewPage() {
                 <span className="text-5xl mb-3 opacity-60">🎙️</span>
                 <h3 className="text-xl font-bold text-white">Select or Start an Interview Session</h3>
                 <p className="mt-1 max-w-sm text-xs text-slate-400">
-                  Select an existing session from the left sidebar or click "Start New Interview" at the top to practice with the AI interviewer using text or voice.
+                  Select an existing session from the left sidebar or click &quot;Start New Interview&quot; at the top to practice with the AI interviewer using text or voice.
                 </p>
               </div>
             )}
           </div>
         </div>
+
+        {/* COMPREHENSIVE RUBRIC SCORECARD MODAL */}
+        {showScorecard && activeSession?.feedback && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-in fade-in">
+            <div className="relative w-full max-w-2xl rounded-3xl border border-white/15 bg-slate-900 p-6 md:p-8 shadow-2xl space-y-6 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between border-b border-white/10 pb-4">
+                <div>
+                  <span className="text-xs font-bold uppercase tracking-wider text-purple-400">
+                    Engineering Evaluation Scorecard
+                  </span>
+                  <h2 className="text-2xl font-bold text-white mt-1">
+                    {activeSession.companyName} • {activeSession.type}
+                  </h2>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col items-end">
+                    <span className="text-xs text-slate-400">Weighted Score</span>
+                    <span className="text-3xl font-extrabold text-emerald-400">
+                      {activeSession.feedback.overallScore}%
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setShowScorecard(false)}
+                    className="rounded-xl border border-white/10 bg-white/5 p-2 text-slate-400 hover:text-white"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              {/* 4-Dimension Rubric Breakdown */}
+              <div className="space-y-3">
+                <h3 className="text-xs font-bold uppercase text-slate-400">4-Dimension Rubric Breakdown</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Technical Accuracy (35%) */}
+                  <div className="rounded-xl border border-white/5 bg-slate-950 p-3 space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-300 font-semibold">Technical Accuracy (35%)</span>
+                      <span className="text-purple-400 font-bold">{activeSession.feedback.technicalAccuracy}%</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className="h-full bg-purple-500 rounded-full"
+                        style={{ width: `${activeSession.feedback.technicalAccuracy}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Problem Solving & Depth (25%) */}
+                  <div className="rounded-xl border border-white/5 bg-slate-950 p-3 space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-300 font-semibold">Problem Solving & Depth (25%)</span>
+                      <span className="text-cyan-400 font-bold">{activeSession.feedback.problemSolvingRating || 75}%</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className="h-full bg-cyan-500 rounded-full"
+                        style={{ width: `${activeSession.feedback.problemSolvingRating || 75}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Communication & Articulation (25%) */}
+                  <div className="rounded-xl border border-white/5 bg-slate-950 p-3 space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-300 font-semibold">Communication & Clarity (25%)</span>
+                      <span className="text-emerald-400 font-bold">{activeSession.feedback.communicationRating}%</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className="h-full bg-emerald-500 rounded-full"
+                        style={{ width: `${activeSession.feedback.communicationRating}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Question Relevance & STAR (15%) */}
+                  <div className="rounded-xl border border-white/5 bg-slate-950 p-3 space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-300 font-semibold">Relevance & Structure (15%)</span>
+                      <span className="text-amber-400 font-bold">{activeSession.feedback.relevanceRating || 80}%</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className="h-full bg-amber-500 rounded-full"
+                        style={{ width: `${activeSession.feedback.relevanceRating || 80}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Strengths & Improvements */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+                  <h4 className="text-xs font-bold uppercase text-emerald-400 mb-2">✅ Identified Strengths</h4>
+                  <ul className="space-y-1.5 text-xs text-slate-300">
+                    {activeSession.feedback.strengths.map((s, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="text-emerald-400">•</span>
+                        <span>{s}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+                  <h4 className="text-xs font-bold uppercase text-amber-400 mb-2">⚠️ Areas for Growth</h4>
+                  <ul className="space-y-1.5 text-xs text-slate-300">
+                    {activeSession.feedback.areasForImprovement.map((a, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span className="text-amber-400">•</span>
+                        <span>{a}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+
+              {activeSession.feedback.detailedFeedback && (
+                <div className="rounded-xl border border-white/5 bg-white/5 p-4 text-xs text-slate-300 italic">
+                  &quot;{activeSession.feedback.detailedFeedback}&quot;
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <button
+                  onClick={() => setShowScorecard(false)}
+                  className="rounded-xl bg-purple-600 px-6 py-2.5 text-xs font-bold text-white transition hover:bg-purple-500"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </ProtectedRoute>
   );
